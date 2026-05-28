@@ -2,45 +2,45 @@
 set -uo pipefail
 
 SUITE="all"
+MODE="both"
 RESUME=0
 FAIL_FAST=0
 DRY_RUN=0
 SKIP_SUMMARY=0
 PYTHON_BIN="${PYTHON:-python}"
-METHOD_NAME="wildgs"
-COMMAND_TEMPLATE=""
-EXPECTED_METRICS_TEMPLATE=""
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts_run/run_all_experiments.sh [options]
+Usage: bash scripts_run/run_dynamic_filter_ablation.sh [options]
 
 Options:
   --suite all|bonn|tum|mocap   Experiment suite to run. Default: all
+  --mode both|on|off           Run dynamic filter on, off, or both. Default: both
   --resume                     Skip experiments whose metrics_full_traj.txt exists
   --fail-fast                  Stop after the first failed experiment
-  --dry-run                    Print selected experiments and exit
+  --dry-run                    Print selected experiments and generated configs, then exit
   --skip-summary               Do not run scripts_run/summarize_pose_eval.py
   --python PATH                Python executable to use. Default: python
-  --method NAME                Method/code name used for logs. Default: wildgs
-  --command-template COMMAND   Command run for each sequence. See docs for placeholders
-  --expected-metrics PATH      Metrics file used by --resume for custom commands
   -h, --help                   Show this help
 EOF
 }
 
 log_info() {
-    printf '[wildgs] %s\n' "$1"
+    printf '[dynamic-filter] %s\n' "$1"
 }
 
 log_warn() {
-    printf '[wildgs] WARNING: %s\n' "$1" >&2
+    printf '[dynamic-filter] WARNING: %s\n' "$1" >&2
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --suite)
             SUITE="${2:-}"
+            shift 2
+            ;;
+        --mode)
+            MODE="${2:-}"
             shift 2
             ;;
         --resume)
@@ -63,18 +63,6 @@ while [[ $# -gt 0 ]]; do
             PYTHON_BIN="${2:-}"
             shift 2
             ;;
-        --method)
-            METHOD_NAME="${2:-}"
-            shift 2
-            ;;
-        --command-template)
-            COMMAND_TEMPLATE="${2:-}"
-            shift 2
-            ;;
-        --expected-metrics)
-            EXPECTED_METRICS_TEMPLATE="${2:-}"
-            shift 2
-            ;;
         -h|--help)
             usage
             exit 0
@@ -95,6 +83,14 @@ case "$SUITE" in
         ;;
 esac
 
+case "$MODE" in
+    both|on|off) ;;
+    *)
+        log_warn "--mode must be one of: both, on, off"
+        exit 2
+        ;;
+esac
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
@@ -102,14 +98,6 @@ cd "$REPO_ROOT"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     log_warn "Cannot find Python executable: $PYTHON_BIN"
     exit 1
-fi
-
-if [[ -z "$COMMAND_TEMPLATE" ]]; then
-    COMMAND_TEMPLATE="{python} run.py {config}"
-fi
-
-if [[ -z "$EXPECTED_METRICS_TEMPLATE" ]]; then
-    EXPECTED_METRICS_TEMPLATE="{output_dir}/traj/metrics_full_traj.txt"
 fi
 
 resolve_config_value() {
@@ -163,41 +151,13 @@ print(os.path.abspath(os.path.join(sys.argv[1], sys.argv[2])))
 PY
 }
 
-replace_all() {
-    local text="$1"
-    local search="$2"
-    local replace="$3"
-    printf '%s\n' "${text//$search/$replace}"
-}
-
-expand_template() {
-    local template="$1"
-    local suite_name="$2"
-    local scene="$3"
-    local config_path="$4"
-    local input_dir="$5"
-    local output_dir="$6"
-    local method_output_dir="$7"
-
-    local expanded="$template"
-    expanded="$(replace_all "$expanded" "{python}" "$PYTHON_BIN")"
-    expanded="$(replace_all "$expanded" "{method}" "$METHOD_NAME")"
-    expanded="$(replace_all "$expanded" "{suite}" "$suite_name")"
-    expanded="$(replace_all "$expanded" "{scene}" "$scene")"
-    expanded="$(replace_all "$expanded" "{config}" "$config_path")"
-    expanded="$(replace_all "$expanded" "{input_dir}" "$input_dir")"
-    expanded="$(replace_all "$expanded" "{output_dir}" "$output_dir")"
-    expanded="$(replace_all "$expanded" "{method_output_dir}" "$method_output_dir")"
-    printf '%s\n' "$expanded"
-}
-
 add_experiment() {
     local suite_name="$1"
-    local config_path="$2"
-    local scene output_root root_folder input_folder output_dir input_dir
+    local dataset_name="$2"
+    local config_path="$3"
+    local scene root_folder input_folder input_dir
 
     scene="$(resolve_config_value "$config_path" "scene")"
-    output_root="$(resolve_config_value "$config_path" "output")"
     root_folder="$(resolve_config_value "$config_path" "root_folder")"
     input_folder="$(resolve_config_value "$config_path" "input_folder")"
 
@@ -207,14 +167,34 @@ add_experiment() {
     fi
 
     input_folder="${input_folder/ROOT_FOLDER_PLACEHOLDER/$root_folder}"
-    output_dir="$(make_abs_path "$output_root/$scene")"
     input_dir="$(make_abs_path "$input_folder")"
 
     EXP_SUITES+=("$suite_name")
+    EXP_DATASETS+=("$dataset_name")
     EXP_CONFIGS+=("$config_path")
     EXP_SCENES+=("$scene")
-    EXP_OUTPUTS+=("$output_dir")
     EXP_INPUTS+=("$input_dir")
+}
+
+make_generated_config() {
+    local state="$1"
+    local dataset_name="$2"
+    local config_path="$3"
+    local generated_path="$4"
+    local activate_value="$5"
+    local output_root="./output/dynamic_filter_${state}/${dataset_name}"
+
+    mkdir -p "$(dirname -- "$generated_path")"
+    cat > "$generated_path" <<EOF
+inherit_from: ${REPO_ROOT}/${config_path}
+
+mapping:
+  dynamic_filter:
+    activate: ${activate_value}
+
+data:
+  output: ${output_root}
+EOF
 }
 
 BONN_CONFIGS=(
@@ -254,47 +234,50 @@ MOCAP_CONFIGS=(
 )
 
 EXP_SUITES=()
+EXP_DATASETS=()
 EXP_CONFIGS=()
 EXP_SCENES=()
-EXP_OUTPUTS=()
 EXP_INPUTS=()
 
 if [[ "$SUITE" == "all" || "$SUITE" == "bonn" ]]; then
     for config in "${BONN_CONFIGS[@]}"; do
-        add_experiment "bonn" "$config"
+        add_experiment "bonn" "Bonn" "$config"
     done
 fi
 
 if [[ "$SUITE" == "all" || "$SUITE" == "tum" ]]; then
     for config in "${TUM_CONFIGS[@]}"; do
-        add_experiment "tum" "$config"
+        add_experiment "tum" "TUM_RGBD" "$config"
     done
 fi
 
 if [[ "$SUITE" == "all" || "$SUITE" == "mocap" ]]; then
     for config in "${MOCAP_CONFIGS[@]}"; do
-        add_experiment "mocap" "$config"
+        add_experiment "mocap" "Wild_SLAM_Mocap" "$config"
     done
 fi
 
-log_info "Selected ${#EXP_CONFIGS[@]} experiment(s), suite: $SUITE, method: $METHOD_NAME"
+if [[ "$MODE" == "both" ]]; then
+    STATES=("on" "off")
+else
+    STATES=("$MODE")
+fi
+
+log_info "Selected ${#EXP_CONFIGS[@]} sequence(s), mode: $MODE"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '%-8s %-34s %s\n' "Suite" "Scene" "Config"
-    for i in "${!EXP_CONFIGS[@]}"; do
-        printf '%-8s %-34s %s\n' "${EXP_SUITES[$i]}" "${EXP_SCENES[$i]}" "${EXP_CONFIGS[$i]}"
+    printf '%-8s %-4s %-34s %s\n' "Suite" "Mode" "Scene" "Generated config"
+    for state in "${STATES[@]}"; do
+        for i in "${!EXP_CONFIGS[@]}"; do
+            generated_config="output/generated_configs/dynamic_filter_${state}/${EXP_SUITES[$i]}/$(basename -- "${EXP_CONFIGS[$i]}")"
+            printf '%-8s %-4s %-34s %s\n' "${EXP_SUITES[$i]}" "$state" "${EXP_SCENES[$i]}" "$generated_config"
+        done
     done
-    log_info "Command template: $COMMAND_TEMPLATE"
     exit 0
 fi
 
-if [[ "$COMMAND_TEMPLATE" == "{python} run.py {config}" && ! -f "$REPO_ROOT/pretrained/droid.pth" ]]; then
+if [[ ! -f "$REPO_ROOT/pretrained/droid.pth" ]]; then
     log_warn "Missing pretrained/droid.pth. Download it first and put it in pretrained/."
-    exit 1
-fi
-
-if [[ -e "$REPO_ROOT/datasets" && ! -d "$REPO_ROOT/datasets" ]]; then
-    log_warn "'datasets' exists but is not a directory. Replace it with a datasets directory."
     exit 1
 fi
 
@@ -313,48 +296,54 @@ if [[ "${#missing_inputs[@]}" -gt 0 ]]; then
 fi
 
 mkdir -p "$REPO_ROOT/output/logs"
-mkdir -p "$REPO_ROOT/output/$METHOD_NAME"
 
 failed=()
-total="${#EXP_CONFIGS[@]}"
-for i in "${!EXP_CONFIGS[@]}"; do
-    index=$((i + 1))
-    method_output_dir="$(make_abs_path "output/$METHOD_NAME/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}")"
-    metrics_path="$(expand_template "$EXPECTED_METRICS_TEMPLATE" "${EXP_SUITES[$i]}" "${EXP_SCENES[$i]}" "${EXP_CONFIGS[$i]}" "${EXP_INPUTS[$i]}" "${EXP_OUTPUTS[$i]}" "$method_output_dir")"
+total=$(( ${#EXP_CONFIGS[@]} * ${#STATES[@]} ))
+count=0
 
-    if [[ "$RESUME" -eq 1 && -f "$metrics_path" ]]; then
-        log_info "[$index/$total] Skip completed: $METHOD_NAME/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
-        continue
+for state in "${STATES[@]}"; do
+    if [[ "$state" == "on" ]]; then
+        activate_value="True"
+    else
+        activate_value="False"
     fi
 
-    timestamp="$(date +%Y%m%d_%H%M%S)"
-    log_path="$REPO_ROOT/output/logs/${timestamp}_${METHOD_NAME}_${EXP_SUITES[$i]}_${EXP_SCENES[$i]}.log"
-    command="$(expand_template "$COMMAND_TEMPLATE" "${EXP_SUITES[$i]}" "${EXP_SCENES[$i]}" "${EXP_CONFIGS[$i]}" "${EXP_INPUTS[$i]}" "${EXP_OUTPUTS[$i]}" "$method_output_dir")"
-    mkdir -p "$method_output_dir"
+    for i in "${!EXP_CONFIGS[@]}"; do
+        count=$((count + 1))
+        generated_config="output/generated_configs/dynamic_filter_${state}/${EXP_SUITES[$i]}/$(basename -- "${EXP_CONFIGS[$i]}")"
+        output_dir="$(make_abs_path "output/dynamic_filter_${state}/${EXP_DATASETS[$i]}/${EXP_SCENES[$i]}")"
+        metrics_path="$output_dir/traj/metrics_full_traj.txt"
 
-    log_info "[$index/$total] Run $METHOD_NAME/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
-    log_info "Log: $log_path"
-    log_info "Command: $command"
+        make_generated_config "$state" "${EXP_DATASETS[$i]}" "${EXP_CONFIGS[$i]}" "$generated_config" "$activate_value"
 
-    bash -lc "$command" 2>&1 | tee "$log_path"
-    status="${PIPESTATUS[0]}"
-
-    if [[ "$status" -ne 0 ]]; then
-        failed+=("$METHOD_NAME/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}: ${EXP_CONFIGS[$i]}")
-        log_warn "Failed: $METHOD_NAME/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
-        if [[ "$FAIL_FAST" -eq 1 ]]; then
-            break
+        if [[ "$RESUME" -eq 1 && -f "$metrics_path" ]]; then
+            log_info "[$count/$total] Skip completed: dynamic_filter_${state}/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
+            continue
         fi
-    fi
+
+        timestamp="$(date +%Y%m%d_%H%M%S)"
+        log_path="$REPO_ROOT/output/logs/${timestamp}_dynamic_filter_${state}_${EXP_SUITES[$i]}_${EXP_SCENES[$i]}.log"
+
+        log_info "[$count/$total] Run dynamic_filter_${state}/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
+        log_info "Config: $generated_config"
+        log_info "Log: $log_path"
+
+        "$PYTHON_BIN" run.py "$generated_config" 2>&1 | tee "$log_path"
+        status="${PIPESTATUS[0]}"
+
+        if [[ "$status" -ne 0 ]]; then
+            failed+=("dynamic_filter_${state}/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}: ${EXP_CONFIGS[$i]}")
+            log_warn "Failed: dynamic_filter_${state}/${EXP_SUITES[$i]}/${EXP_SCENES[$i]}"
+            if [[ "$FAIL_FAST" -eq 1 ]]; then
+                break 2
+            fi
+        fi
+    done
 done
 
 if [[ "$SKIP_SUMMARY" -eq 0 ]]; then
-    if [[ "$COMMAND_TEMPLATE" == "{python} run.py {config}" ]]; then
-        log_info "Summarizing pose evaluation"
-        "$PYTHON_BIN" scripts_run/summarize_pose_eval.py
-    else
-        log_info "Skip built-in summary for custom command. Use the custom method's evaluator or set outputs to WildGS-SLAM format."
-    fi
+    log_info "Summarizing pose evaluation"
+    "$PYTHON_BIN" scripts_run/summarize_pose_eval.py
 fi
 
 if [[ "${#failed[@]}" -gt 0 ]]; then
@@ -363,4 +352,4 @@ if [[ "${#failed[@]}" -gt 0 ]]; then
     exit 1
 fi
 
-log_info "All selected experiments finished."
+log_info "Dynamic filter ablation finished."
