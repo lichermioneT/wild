@@ -134,25 +134,22 @@ class Mapper(object):
 
             self.vis_uncertainty_online = self.uncer_params["vis_uncertainty_online"]
 
-        dynamic_filter_defaults = {
-            "activate": False,
-            "warmup_iters": 20,
-            "ema": 0.85,
-            "uncertainty_quantile": 0.75,
-            "rgb_quantile": 0.85,
-            "depth_quantile": 0.85,
-            "uncertainty_gain": 0.45,
-            "rgb_gain": 0.35,
-            "depth_gain": 0.20,
-            "dynamic_threshold": 0.55,
-            "dynamic_weight_min": 0.05,
-            "opacity_threshold": 0.15,
-        }
-        dynamic_filter_defaults.update(self.config["mapping"].get("dynamic_filter", {}))
-        self.dynamic_filter_params = munchify(dynamic_filter_defaults)
+        self.dynamic_filter_params = self._build_dynamic_filter_params()
         self.dynamic_filter_enabled = (
             self.uncertainty_aware and self.dynamic_filter_params.activate
         )
+        kernel_size = int(self.dynamic_filter_params.spatial_median_filter_size)
+        if kernel_size > 1 and kernel_size % 2 == 0:
+            kernel_size += 1
+        self.dynamic_filter_smoother = (
+            MedianPool2d(kernel_size=kernel_size, stride=1, same=True)
+            if kernel_size > 1
+            else None
+        )
+        self.dynamic_filter_stats_path = os.path.join(
+            self.save_dir, "dynamic_filter_stats.csv"
+        )
+        self.dynamic_filter_stats_header_written = False
 
         # Setup queue object for gui communication
         self.q_main2vis = q_main2vis
@@ -318,6 +315,46 @@ class Mapper(object):
         self.deform_gaussians = self.config["mapping"]["deform_gaussians"]
         self.online_plotting = self.config["mapping"]["online_plotting"]
 
+    def _build_dynamic_filter_params(self):
+        """Build named dynamic-filter variants for paper ablations."""
+        params = {
+            "activate": False,
+            "mode": "full",
+            "warmup_iters": 20,
+            "ema": 0.85,
+            "spatial_median_filter_size": 5,
+            "uncertainty_quantile": 0.75,
+            "rgb_quantile": 0.85,
+            "depth_quantile": 0.85,
+            "uncertainty_gain": 0.45,
+            "rgb_gain": 0.35,
+            "depth_gain": 0.20,
+            "dynamic_threshold": 0.55,
+            "score_steepness": 8.0,
+            "dynamic_weight_min": 0.05,
+            "opacity_threshold": 0.15,
+            "log_stats": True,
+            "log_interval": 200,
+        }
+        params.update(self.config["mapping"].get("dynamic_filter", {}))
+
+        mode = params.get("mode", "full")
+        if mode == "uncertainty_only":
+            params.update({"uncertainty_gain": 1.0, "rgb_gain": 0.0, "depth_gain": 0.0})
+        elif mode == "residual_only":
+            params.update({"uncertainty_gain": 0.0, "rgb_gain": 0.65, "depth_gain": 0.35})
+        elif mode == "no_temporal":
+            params["ema"] = 0.0
+        elif mode == "no_depth":
+            params.update({"uncertainty_gain": 0.55, "rgb_gain": 0.45, "depth_gain": 0.0})
+        elif mode != "full":
+            raise ValueError(
+                "mapping.dynamic_filter.mode must be one of: "
+                "full, uncertainty_only, residual_only, no_temporal, no_depth"
+            )
+
+        return munchify(params)
+
     def _get_viewpoint(self, video_idx: int, frame_idx: int) -> Tuple[Camera, bool]:
         """
         Create and initialize a Camera object for a given frame.
@@ -397,6 +434,62 @@ class Mapper(object):
         return torch.clamp(evidence / scale, 0.0, 1.0)
 
     @torch.no_grad()
+    def _smooth_dynamic_reliability(self, static_weight: torch.Tensor) -> torch.Tensor:
+        if self.dynamic_filter_smoother is None:
+            return static_weight
+
+        smoothed = self.dynamic_filter_smoother(static_weight[None, None]).squeeze(0).squeeze(0)
+        return smoothed.clamp(0.0, 1.0)
+
+    @torch.no_grad()
+    def _write_dynamic_filter_stats(
+        self,
+        viewpoint: Camera,
+        static_weight: torch.Tensor,
+        dynamic_score: torch.Tensor,
+        uncertainty_score: torch.Tensor,
+        rgb_score: torch.Tensor,
+        depth_score: torch.Tensor,
+    ) -> None:
+        if not self.dynamic_filter_params.log_stats:
+            return
+
+        log_interval = max(1, int(self.dynamic_filter_params.log_interval))
+        if self.iteration_count % log_interval != 0:
+            return
+
+        os.makedirs(os.path.dirname(self.dynamic_filter_stats_path), exist_ok=True)
+        write_header = (
+            not self.dynamic_filter_stats_header_written
+            and (
+                not os.path.exists(self.dynamic_filter_stats_path)
+                or os.path.getsize(self.dynamic_filter_stats_path) == 0
+            )
+        )
+        with open(self.dynamic_filter_stats_path, "a", encoding="utf-8") as f:
+            if write_header:
+                f.write(
+                    "iteration,view_uid,mode,reliability_mean,dynamic_ratio,"
+                    "dynamic_score_mean,uncertainty_score_mean,rgb_score_mean,"
+                    "depth_score_mean\n"
+                )
+                self.dynamic_filter_stats_header_written = True
+
+            dynamic_ratio = (static_weight < 0.5).float().mean()
+            row = [
+                self.iteration_count,
+                getattr(viewpoint, "uid", -1),
+                self.dynamic_filter_params.mode,
+                static_weight.mean().item(),
+                dynamic_ratio.item(),
+                dynamic_score.mean().item(),
+                uncertainty_score.mean().item(),
+                rgb_score.mean().item(),
+                depth_score.mean().item(),
+            ]
+            f.write(",".join(str(v) for v in row) + "\n")
+
+    @torch.no_grad()
     def _get_dynamic_reliability(
         self,
         viewpoint: Camera,
@@ -458,12 +551,14 @@ class Mapper(object):
             + self.dynamic_filter_params.depth_gain * depth_score
         )
         dynamic_prob = torch.sigmoid(
-            8.0 * (dynamic_score - self.dynamic_filter_params.dynamic_threshold)
+            self.dynamic_filter_params.score_steepness
+            * (dynamic_score - self.dynamic_filter_params.dynamic_threshold)
         )
         static_weight = 1.0 - dynamic_prob * (
             1.0 - self.dynamic_filter_params.dynamic_weight_min
         )
         static_weight = torch.where(visible, static_weight, torch.ones_like(static_weight))
+        static_weight = self._smooth_dynamic_reliability(static_weight)
 
         if hasattr(viewpoint, "dynamic_reliability"):
             ema = self.dynamic_filter_params.ema
@@ -473,6 +568,15 @@ class Mapper(object):
             ).detach()
         else:
             viewpoint.dynamic_reliability = static_weight.detach()
+
+        self._write_dynamic_filter_stats(
+            viewpoint,
+            viewpoint.dynamic_reliability,
+            dynamic_score,
+            uncertainty_score,
+            rgb_score,
+            depth_score,
+        )
 
         return viewpoint.dynamic_reliability.unsqueeze(0)
 

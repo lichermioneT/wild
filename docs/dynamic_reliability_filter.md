@@ -1,4 +1,4 @@
-# Temporally Calibrated Dynamic Reliability
+# Temporally Calibrated Dynamic Reliability Filter
 
 This fork adds a lightweight dynamic reliability filter for WildGS-SLAM.
 
@@ -18,10 +18,23 @@ For each keyframe, the mapper fuses three dynamic cues:
 - foreground depth conflict where the observed metric depth is closer than the
   rendered static map.
 
-The fused dynamic score is converted into a static reliability weight. Each
-keyframe keeps an exponential moving average of this weight, making the mask
-temporally stable across mapping iterations. The RGB and depth mapping losses
-are then down-weighted in low-reliability regions.
+The fused dynamic score is converted into a static reliability weight. A median
+filter suppresses speckle in the mask. Each keyframe keeps an exponential
+moving average of this weight, making the mask temporally stable across mapping
+iterations. The RGB and depth mapping losses are then down-weighted in
+low-reliability regions.
+
+The implementation supports named modes for paper ablations:
+
+- `full`: all three cues + spatial smoothing + temporal EMA.
+- `uncertainty_only`: learned uncertainty cue only.
+- `residual_only`: photometric residual + foreground depth conflict.
+- `no_temporal`: full cues without temporal EMA.
+- `no_depth`: uncertainty + photometric cues without depth conflict.
+
+For interpretability, each run writes `dynamic_filter_stats.csv` under its
+output scene folder. The file records the current mode, mean static reliability,
+estimated dynamic ratio, and the three cue means.
 
 ## Configuration
 

@@ -20,11 +20,43 @@ def setup_seed(seed):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config', type=str, help='Path to config file.')
+    parser.add_argument(
+        '--dynamic-filter',
+        choices=['on', 'off'],
+        default=None,
+        help='Override mapping.dynamic_filter.activate for ablation experiments.',
+    )
+    parser.add_argument(
+        '--dynamic-filter-ablation',
+        choices=['full', 'off', 'uncertainty_only', 'residual_only', 'no_temporal', 'no_depth'],
+        default=None,
+        help='Named dynamic-filter ablation. Overrides mapping.dynamic_filter mode/gains.',
+    )
+    parser.add_argument(
+        '--output-root',
+        type=str,
+        default=None,
+        help='Override cfg["data"]["output"]. The scene name is still appended automatically.',
+    )
     args = parser.parse_args()
 
     torch.multiprocessing.set_start_method('spawn')
 
     cfg = config.load_config(args.config)
+    if args.dynamic_filter is not None:
+        cfg.setdefault('mapping', {}).setdefault('dynamic_filter', {})
+        cfg['mapping']['dynamic_filter']['activate'] = args.dynamic_filter == 'on'
+    if args.dynamic_filter_ablation is not None:
+        cfg.setdefault('mapping', {}).setdefault('dynamic_filter', {})
+        cfg['mapping']['dynamic_filter']['activate'] = args.dynamic_filter_ablation != 'off'
+        cfg['mapping']['dynamic_filter']['mode'] = (
+            'full' if args.dynamic_filter_ablation == 'off'
+            else args.dynamic_filter_ablation
+        )
+    if args.output_root is not None:
+        cfg.setdefault('data', {})
+        cfg['data']['output'] = args.output_root
+
     setup_seed(cfg['setup_seed'])
     if cfg['fast_mode']:
         # Force the final refine iterations to be 3000 if in fast mode
@@ -53,4 +85,3 @@ if __name__ == '__main__':
 
     end_time = strftime("%Y-%m-%d %H:%M:%S", gmtime())
     print("-"*30+Fore.LIGHTRED_EX+f"\nWildGS-SLAM finishes!\n"+Style.RESET_ALL+f"{end_time}\n"+"-"*30)
-

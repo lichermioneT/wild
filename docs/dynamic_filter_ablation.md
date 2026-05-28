@@ -5,12 +5,16 @@ This experiment compares the same WildGS-SLAM code and the same data with:
 - `mapping.dynamic_filter.activate: True`
 - `mapping.dynamic_filter.activate: False`
 
-The original config files are not modified. The runner generates temporary
-configs under:
+The original config files are not modified. `run.py` accepts command-line
+overrides for this ablation:
 
-```text
-output/generated_configs/dynamic_filter_on/
-output/generated_configs/dynamic_filter_off/
+```bash
+--dynamic-filter on
+--dynamic-filter off
+--dynamic-filter-ablation uncertainty_only
+--dynamic-filter-ablation residual_only
+--dynamic-filter-ablation no_temporal
+--output-root ./output/dynamic_filter_on/Bonn
 ```
 
 Results are saved separately:
@@ -25,26 +29,28 @@ output/dynamic_filter_off/
 Run all dynamic sequences with both settings:
 
 ```bash
-bash run_dynamic_filter_ablation.sh --resume
+bash run_dynamic_filter_ablation.sh
 ```
 
-Run only Bonn:
+The script is intentionally just a command list. You can open it, comment out
+lines, and run only the experiments you want.
+
+Run only the `on` commands:
 
 ```bash
-bash run_dynamic_filter_ablation.sh --suite bonn --resume
+bash scripts_run/run_dynamic_filter_on.sh
 ```
 
-Run only one side of the comparison:
+Run only the `off` commands:
 
 ```bash
-bash run_dynamic_filter_ablation.sh --mode on --resume
-bash run_dynamic_filter_ablation.sh --mode off --resume
+bash scripts_run/run_dynamic_filter_off.sh
 ```
 
-Preview without running:
+Run component ablations on Bonn:
 
 ```bash
-bash run_dynamic_filter_ablation.sh --dry-run
+bash scripts_run/run_dynamic_filter_component_bonn.sh
 ```
 
 After finishing, pose summaries are written by:
@@ -58,4 +64,7 @@ The summary CSV files will appear under `output/`, including:
 ```text
 output/dynamic_filter_on_eval.csv
 output/dynamic_filter_off_eval.csv
+output/dynamic_filter_uncertainty_only_eval.csv
+output/dynamic_filter_residual_only_eval.csv
+output/dynamic_filter_no_temporal_eval.csv
 ```
