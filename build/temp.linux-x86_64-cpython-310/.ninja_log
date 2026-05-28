@@ -1,0 +1,5 @@
+# ninja log v7
+1	18768	1779949994614997342	/root/wild/build/temp.linux-x86_64-cpython-310/src/lib/droid.o	2ef748e19a56933
+1	168066	1779949994614997342	/root/wild/build/temp.linux-x86_64-cpython-310/src/lib/altcorr_kernel.o	20677712a2d49f37
+1	168677	1779949994614997342	/root/wild/build/temp.linux-x86_64-cpython-310/src/lib/correlation_kernels.o	c94053d7819b34c7
+2	190675	1779949994614997342	/root/wild/build/temp.linux-x86_64-cpython-310/src/lib/droid_kernels.o	3bdc983e83a35e4e

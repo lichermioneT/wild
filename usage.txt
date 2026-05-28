@@ -1,0 +1,12 @@
+export TORCH_LIB=$(python - <<'PY'
+import torch, os
+print(os.path.join(os.path.dirname(torch.__file__), "lib"))
+PY
+)
+
+export LD_LIBRARY_PATH=$TORCH_LIB:$LD_LIBRARY_PATH
+export PYTHONPATH=/root/wild/thirdparty/simple-knn:$PYTHONPATH
+
+
+python run.py ./configs/Dynamic/Bonn/bonn_balloon.yaml --dynamic-filter on --output-root ./output/dynamic_filter_on/Bonn
+python run.py ./configs/Dynamic/Bonn/bonn_balloon.yaml --dynamic-filter off --output-root ./output/dynamic_filter_off/Bonn
