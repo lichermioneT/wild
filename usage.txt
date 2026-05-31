@@ -10,3 +10,26 @@ export PYTHONPATH=/root/wild/thirdparty/simple-knn:$PYTHONPATH
 
 python run.py ./configs/Dynamic/Bonn/bonn_balloon.yaml --dynamic-filter on --output-root ./output/dynamic_filter_on/Bonn
 python run.py ./configs/Dynamic/Bonn/bonn_balloon.yaml --dynamic-filter off --output-root ./output/dynamic_filter_off/Bonn
+
+
+python run.py ./configs/Dynamic/Bonn/bonn_crowd.yaml --dynamic-filter on --output-root ./output/dynamic_filter_on/Bonn
+python run.py ./configs/Dynamic/Bonn/bonn_crowd.yaml --dynamic-filter off --output-root ./output/dynamic_filter_off/Bonn
+
+
+Bonn/bonn_crowd
+Bonn/bonn_person_tracking
+Bonn/bonn_moving_nonobstructing_box
+TUM_RGBD/freiburg2_desk_with_person
+TUM_RGBD/freiburg3_walking_xyz
+TUM_RGBD/freiburg3_walking_rpy
+
+TUM_RGBD/freiburg3_sitting_xyz
+TUM_RGBD/freiburg3_sitting_halfsphere_static
+Wild_SLAM_Mocap/crowd
+Wild_SLAM_Mocap/person_tracking
+
+
+
+python run.py ./configs/Dynamic/Bonn/bonn_person_tracking.yaml --dynamic-filter on --output-root ./output/dynamic_filter_on/Bonn
+python run.py ./configs/Dynamic/Bonn/bonn_person_tracking.yaml --dynamic-filter off --output-root ./output/dynamic_filter_off/Bonn
+
