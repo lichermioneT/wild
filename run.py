@@ -28,7 +28,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--dynamic-filter-ablation',
-        choices=['full', 'off', 'uncertainty_only', 'residual_only', 'no_temporal', 'no_depth'],
+        choices=['consensus', 'full', 'off', 'uncertainty_only', 'residual_only', 'no_temporal', 'no_depth'],
         default=None,
         help='Named dynamic-filter ablation. Overrides mapping.dynamic_filter mode/gains.',
     )

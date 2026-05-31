@@ -81,7 +81,7 @@ mapping:
 
   dynamic_filter:
     activate: True
-    mode: "full" # full, uncertainty_only, residual_only, no_temporal, no_depth
+    mode: "consensus" # consensus, full, uncertainty_only, residual_only, no_temporal, no_depth
     warmup_iters: 20
     ema: 0.85
     spatial_median_filter_size: 5
@@ -92,7 +92,7 @@ mapping:
     rgb_gain: 0.35
     depth_gain: 0.20
     dynamic_threshold: 0.55
-    score_steepness: 8.0
+    score_steepness: 12.0
     dynamic_weight_min: 0.05
     opacity_threshold: 0.15
     log_stats: True

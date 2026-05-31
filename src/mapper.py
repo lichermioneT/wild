@@ -319,7 +319,7 @@ class Mapper(object):
         """Build named dynamic-filter variants for paper ablations."""
         params = {
             "activate": False,
-            "mode": "full",
+            "mode": "consensus",
             "warmup_iters": 20,
             "ema": 0.85,
             "spatial_median_filter_size": 5,
@@ -330,7 +330,7 @@ class Mapper(object):
             "rgb_gain": 0.35,
             "depth_gain": 0.20,
             "dynamic_threshold": 0.55,
-            "score_steepness": 8.0,
+            "score_steepness": 12.0,
             "dynamic_weight_min": 0.05,
             "opacity_threshold": 0.15,
             "log_stats": True,
@@ -347,10 +347,10 @@ class Mapper(object):
             params["ema"] = 0.0
         elif mode == "no_depth":
             params.update({"uncertainty_gain": 0.55, "rgb_gain": 0.45, "depth_gain": 0.0})
-        elif mode != "full":
+        elif mode not in ("full", "consensus"):
             raise ValueError(
                 "mapping.dynamic_filter.mode must be one of: "
-                "full, uncertainty_only, residual_only, no_temporal, no_depth"
+                "full, consensus, uncertainty_only, residual_only, no_temporal, no_depth"
             )
 
         return munchify(params)
@@ -489,6 +489,19 @@ class Mapper(object):
             ]
             f.write(",".join(str(v) for v in row) + "\n")
 
+    def _reset_dynamic_filter_stats(self) -> None:
+        if not self.dynamic_filter_enabled or not self.dynamic_filter_params.log_stats:
+            return
+
+        os.makedirs(os.path.dirname(self.dynamic_filter_stats_path), exist_ok=True)
+        with open(self.dynamic_filter_stats_path, "w", encoding="utf-8") as f:
+            f.write(
+                "iteration,view_uid,mode,reliability_mean,dynamic_ratio,"
+                "dynamic_score_mean,uncertainty_score_mean,rgb_score_mean,"
+                "depth_score_mean\n"
+            )
+        self.dynamic_filter_stats_header_written = True
+
     @torch.no_grad()
     def _get_dynamic_reliability(
         self,
@@ -545,11 +558,25 @@ class Mapper(object):
             self.dynamic_filter_params.depth_quantile,
         )
 
-        dynamic_score = (
-            self.dynamic_filter_params.uncertainty_gain * uncertainty_score
-            + self.dynamic_filter_params.rgb_gain * rgb_score
-            + self.dynamic_filter_params.depth_gain * depth_score
-        )
+        if self.dynamic_filter_params.mode == "consensus":
+            residual_gain = max(
+                self.dynamic_filter_params.rgb_gain
+                + self.dynamic_filter_params.depth_gain,
+                1e-6,
+            )
+            residual_score = (
+                self.dynamic_filter_params.rgb_gain * rgb_score
+                + self.dynamic_filter_params.depth_gain * depth_score
+            ) / residual_gain
+            dynamic_score = torch.sqrt(
+                torch.clamp(uncertainty_score * residual_score, min=0.0)
+            )
+        else:
+            dynamic_score = (
+                self.dynamic_filter_params.uncertainty_gain * uncertainty_score
+                + self.dynamic_filter_params.rgb_gain * rgb_score
+                + self.dynamic_filter_params.depth_gain * depth_score
+            )
         dynamic_prob = torch.sigmoid(
             self.dynamic_filter_params.score_steepness
             * (dynamic_score - self.dynamic_filter_params.dynamic_threshold)
@@ -952,6 +979,7 @@ class Mapper(object):
 
         self.iteration_count = 0
         self.iterations_after_densify_or_reset = 0
+        self._reset_dynamic_filter_stats()
         self.occ_aware_visibility = {}
         self.frame_count_log = {}
         self.current_window = []

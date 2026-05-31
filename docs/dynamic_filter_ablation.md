@@ -11,6 +11,8 @@ overrides for this ablation:
 ```bash
 --dynamic-filter on
 --dynamic-filter off
+--dynamic-filter-ablation consensus
+--dynamic-filter-ablation full
 --dynamic-filter-ablation uncertainty_only
 --dynamic-filter-ablation residual_only
 --dynamic-filter-ablation no_temporal

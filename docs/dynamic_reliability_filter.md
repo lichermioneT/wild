@@ -22,11 +22,14 @@ The fused dynamic score is converted into a static reliability weight. A median
 filter suppresses speckle in the mask. Each keyframe keeps an exponential
 moving average of this weight, making the mask temporally stable across mapping
 iterations. The RGB and depth mapping losses are then down-weighted in
-low-reliability regions.
+low-reliability regions. The default `consensus` mode only strongly suppresses
+pixels where learned uncertainty and RGB/depth residual evidence agree, reducing
+broad false positives from uncertainty alone.
 
 The implementation supports named modes for paper ablations:
 
-- `full`: all three cues + spatial smoothing + temporal EMA.
+- `consensus`: uncertainty and RGB/depth residual evidence must agree.
+- `full`: weighted-sum fusion of all three cues + spatial smoothing + temporal EMA.
 - `uncertainty_only`: learned uncertainty cue only.
 - `residual_only`: photometric residual + foreground depth conflict.
 - `no_temporal`: full cues without temporal EMA.
@@ -47,6 +50,7 @@ original uncertainty-aware mapping behavior.
 ## Suggested Ablations
 
 - `dynamic_filter=False`: original WildGS-SLAM-style uncertainty mapping.
+- full weighted-sum fusion: set `mode=full`.
 - uncertainty-only: set `rgb_gain=0`, `depth_gain=0`.
 - residual-only: set `uncertainty_gain=0`.
 - no temporal smoothing: set `ema=0`.
